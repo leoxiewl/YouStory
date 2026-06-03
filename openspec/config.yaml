@@ -1,20 +1,32 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
+# 项目上下文（可选）
+# 这段内容会在创建变更资料时提供给智能助手。
+# 可加入技术栈、约定、风格指南、领域知识等。
+# 示例：
 #   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+#     技术栈：TypeScript、React、Node.js
+#     使用约定式提交
+#     领域：电商平台
+context: |
+  默认使用中文撰写面向用户和团队阅读的文档、提案、设计说明和任务清单。
+  除产品专有名词、代码标识、文件路径、命令、接口字段，以及 OpenSpec 解析必需的固定关键词外，不在正文中使用英文。
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
+# 每类资料的规则（可选）
+# 可为不同资料类型加入自定义规则。
+# 示例：
 #   rules:
 #     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
+#       - 提案控制在 500 字以内
+#       - 始终包含“非目标”部分
 #     tasks:
-#       - Break tasks into chunks of max 2 hours
+#       - 任务拆分到最多 2 小时可完成的粒度
+rules:
+  proposal:
+    - 正文使用中文；只有能力标识、代码标识和工具要求的固定格式可以保留英文。
+  design:
+    - 正文使用中文；技术名词优先给出中文表达，必要时才保留原始标识。
+  tasks:
+    - 任务说明使用中文，并保持可执行、可验证。
+  specs:
+    - 需求说明和场景描述使用中文；保留 OpenSpec 校验所需的 ADDED Requirements、Requirement、Scenario、WHEN、THEN、SHALL、MUST 等固定关键词。

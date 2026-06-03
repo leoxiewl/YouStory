@@ -84,6 +84,12 @@ YouStory 采用双运行模式：
 
 完整技术方案见 [docs/tech-stack.md](docs/tech-stack.md)。
 
+## Series Workflow
+
+YouStory 的下一阶段会把一个项目视为一部完整剧集：项目下包含多集，每一集都有剧本创作、分镜设计、视频生成、配音及音效、后期剪辑五个环节。
+
+完整功能计划见 [series-project-workflow.md](series-project-workflow.md)。
+
 ## Deployment
 
 YouStory 的部署目标分为两类：

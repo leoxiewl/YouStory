@@ -7,3 +7,7 @@ dist
 .vercel
 *.tsbuildinfo
 .DS_Store
+
+.claude
+.codex
+openspec/
