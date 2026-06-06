@@ -31,6 +31,8 @@ export type StoryEpisode = {
   keywords: string[]
   emotionalTone?: string
   script: EpisodeScriptState
+  novelToScript?: NovelToScriptState
+  production?: EpisodeProductionState
   workflow: EpisodeWorkflowStage[]
 }
 
@@ -41,11 +43,17 @@ export type EpisodeScriptState = {
 }
 
 export type WorkflowStageId =
-  | "script_writing"
-  | "storyboard_design"
+  | "raw_content"
+  | "ai_rewrite"
+  | "extract_characters_scenes"
+  | "voice_casting"
+  | "storyboard_list"
+  | "character_images"
+  | "scene_images"
+  | "dubbing_generation"
+  | "shot_images"
   | "video_generation"
-  | "voiceover_sound"
-  | "post_production_editing"
+  | "compose_export"
 
 export type WorkflowStageStatus =
   | "not_started"
@@ -61,6 +69,120 @@ export type EpisodeWorkflowStage = {
   inputs: string[]
   outputs: string[]
   notes?: string
+}
+
+export type LocalProductionStatus =
+  | "idle"
+  | "generating"
+  | "ready"
+  | "needs_revision"
+
+export type EpisodeProductionState = {
+  characterAssets: Record<string, CharacterProductionAsset>
+  sceneAssets: Record<string, SceneProductionAsset>
+  storyboardAssets: Record<string, StoryboardProductionAsset>
+  export?: ExportProductionAsset
+  updatedAt: string
+}
+
+export type CharacterProductionAsset = {
+  voiceId?: string
+  voiceName?: string
+  voiceSampleStatus?: LocalProductionStatus
+  imageStatus?: LocalProductionStatus
+  imageLabel?: string
+  updatedAt?: string
+}
+
+export type SceneProductionAsset = {
+  imageStatus?: LocalProductionStatus
+  imageLabel?: string
+  updatedAt?: string
+}
+
+export type StoryboardProductionAsset = {
+  ttsStatus?: LocalProductionStatus
+  firstFrameStatus?: LocalProductionStatus
+  firstFrameUrl?: string
+  firstFrameLabel?: string
+  lastFrameStatus?: LocalProductionStatus
+  lastFrameUrl?: string
+  lastFrameLabel?: string
+  videoStatus?: LocalProductionStatus
+  updatedAt?: string
+}
+
+export type ExportProductionAsset = {
+  status: LocalProductionStatus
+  title?: string
+  generatedAt?: string
+}
+
+export type NovelToScriptStatus =
+  | "idle"
+  | "generating"
+  | "reviewing"
+  | "approved"
+  | "needs_revision"
+
+export type NovelToScriptState = {
+  novelText: string
+  status: NovelToScriptStatus
+  result?: NovelToScriptResult
+  updatedAt: string
+}
+
+export type NovelToScriptResult = {
+  characters: ScriptCharacter[]
+  scenes: ScriptScene[]
+  propsEffects: ScriptPropEffect[]
+  storyboards: ScriptStoryboard[]
+}
+
+export type ScriptCharacter = {
+  id: string
+  name: string
+  age: string
+  appearance: string
+  profile: string
+}
+
+export type ScriptScene = {
+  id: string
+  name: string
+  environment: string
+  prompt: string
+}
+
+export type ScriptPropEffect = {
+  id: string
+  name: string
+  type: "prop" | "effect"
+  description: string
+  prompt: string
+}
+
+export type ScriptStoryboard = {
+  id: string
+  shotNumber: string
+  shotSize: string
+  durationSeconds?: number
+  cameraAngle?: string
+  cameraMove?: string
+  location?: string
+  timeOfDay?: string
+  cameraLogic: string
+  visualDescription: string
+  action?: string
+  result?: string
+  atmosphere?: string
+  prompt: string
+  dialogue: string
+  sound: string
+  characterIds: string[]
+  sceneId: string
+  propEffectIds: string[]
+  reviewStatus: "original" | "edited" | "needs_review"
 }
 
 export type ActiveView =
