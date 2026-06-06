@@ -2,11 +2,20 @@
   "name": "youstory",
   "private": true,
   "workspaces": [
-    "apps/web"
+    "apps/web",
+    "apps/local-api"
   ],
   "scripts": {
     "dev": "npm --workspace apps/web run dev",
+    "dev:api": "npm --workspace apps/local-api run dev",
     "build": "npm --workspace apps/web run build",
-    "typecheck": "npm --workspace apps/web run typecheck"
+    "build:api": "npm --workspace apps/local-api run build",
+    "db:generate": "npm --workspace apps/local-api run db:generate",
+    "db:migrate": "npm --workspace apps/local-api run db:migrate",
+    "db:push": "npm --workspace apps/local-api run db:push",
+    "typecheck": "npm --workspace apps/web run typecheck && npm --workspace apps/local-api run typecheck"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.1"
   }
 }

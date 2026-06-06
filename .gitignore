@@ -11,3 +11,9 @@ dist
 .claude
 .codex
 openspec/
+
+# Local API runtime data
+data/youstorys.sqlite
+data/youstorys.sqlite-shm
+data/youstorys.sqlite-wal
+data/static/
