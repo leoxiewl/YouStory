@@ -238,6 +238,51 @@ export default function HomePage() {
     setNotice("已从这条记录开始一个单集剧集项目。")
   }
 
+  function addEpisodeToProject(projectId: string) {
+    setProjects((current) =>
+      current.map((project) => {
+        if (project.id !== projectId) {
+          return project
+        }
+
+        const episodeNumber = project.episodes.length + 1
+        const episode = createStoryEpisode({
+          projectId: project.id,
+          episodeNumber,
+          title: `第 ${episodeNumber} 集`,
+          summary: `围绕「${project.title}」继续展开的新一集。`,
+          keywords: deriveKeywords(project.seriesTheme || project.summary),
+          emotionalTone: "待补充",
+          scriptDraft: "",
+        })
+
+        return {
+          ...project,
+          targetEpisodeCount: Math.max(project.targetEpisodeCount ?? 0, episodeNumber),
+          episodes: [...project.episodes, episode],
+        }
+      }),
+    )
+    setSelectedProjectId(projectId)
+  }
+
+  function updateEpisode(updatedEpisode: StoryEpisode) {
+    setProjects((current) =>
+      current.map((project) => {
+        if (project.id !== updatedEpisode.projectId) {
+          return project
+        }
+
+        return {
+          ...project,
+          episodes: project.episodes.map((episode) =>
+            episode.id === updatedEpisode.id ? updatedEpisode : episode,
+          ),
+        }
+      }),
+    )
+  }
+
   return (
     <main
       className={clsx(
@@ -328,6 +373,7 @@ export default function HomePage() {
           {activeView === "project-detail" && selectedProject && (
             <ProjectDetailView
               project={selectedProject}
+              onAddEpisode={() => addEpisodeToProject(selectedProject.id)}
               onOpenEpisode={(episodeId) => openEpisode(selectedProject.id, episodeId)}
             />
           )}
@@ -338,6 +384,7 @@ export default function HomePage() {
               project={selectedProject}
               sourceRecord={selectedProjectRecord}
               onBackToProject={() => openProject(selectedProject.id)}
+              onUpdateEpisode={updateEpisode}
             />
           )}
 
@@ -581,6 +628,12 @@ function TopBar({
           : activeView === "search"
             ? "搜索"
             : "新记录"
+  const titleIcon =
+    (activeView === "project-detail" || activeView === "episode-workflow") && selectedProject ? (
+      <Clapperboard size={18} />
+    ) : (
+      <Archive size={18} />
+    )
 
   return (
     <header className="flex h-[84px] items-center justify-between px-4 sm:px-8 lg:px-10">
@@ -594,7 +647,7 @@ function TopBar({
           <Menu size={20} />
         </button>
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-paper shadow-sm">
-          <Archive size={18} />
+          {titleIcon}
         </div>
         <button className="flex min-w-0 items-center gap-2 text-left" type="button">
           <span className="truncate text-xl font-semibold">{title}</span>
@@ -776,9 +829,11 @@ function RecordDetailView({
 
 function ProjectDetailView({
   project,
+  onAddEpisode,
   onOpenEpisode,
 }: {
   project: StoryProject
+  onAddEpisode: () => void
   onOpenEpisode: (episodeId: string) => void
 }) {
   return (
@@ -802,7 +857,14 @@ function ProjectDetailView({
         <div className="mt-8">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="font-semibold">全部剧集</h2>
-            <span className="text-sm text-quiet">点击单集进入完整创作流程</span>
+            <button
+              className="inline-flex items-center gap-2 rounded-full border border-line bg-white px-3 py-1.5 text-sm font-medium text-ink shadow-sm transition hover:border-ink"
+              onClick={onAddEpisode}
+              type="button"
+            >
+              <Plus size={16} />
+              添加剧集
+            </button>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             {project.episodes.map((episode) => (
@@ -818,7 +880,7 @@ function ProjectDetailView({
                     <h3 className="mt-2 text-xl font-semibold">{episode.title}</h3>
                   </div>
                   <span className="rounded-full bg-white px-3 py-1 text-xs text-quiet shadow-sm">
-                    {getEpisodeProgress(episode)} / 5
+                    {getEpisodeProgress(episode)} / {episode.workflow.length}
                   </span>
                 </div>
                 <p className="mt-3 text-sm leading-7 text-quiet">{episode.summary}</p>
