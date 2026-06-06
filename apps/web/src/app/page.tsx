@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import clsx from "clsx"
 import {
   Archive,
@@ -20,18 +20,8 @@ import {
   X,
 } from "lucide-react"
 import { EpisodeWorkflowView } from "./episode-workflow-view"
-import { sampleProjects, sampleRecords } from "@/lib/sample-data"
-import {
-  PROJECTS_KEY,
-  RECORDS_KEY,
-  readCollection,
-  writeProjects,
-  writeRecords,
-} from "@/lib/storage"
-import {
-  createStoryEpisode,
-  normalizeStoryProject,
-} from "@/lib/workflow"
+import { useRecords } from "@/lib/hooks/useRecords"
+import { useProjects } from "@/lib/hooks/useProjects"
 import type {
   ActiveView,
   RecordCategory,
@@ -52,9 +42,21 @@ const categoryStyles: Record<RecordCategory, string> = {
 }
 
 export default function HomePage() {
-  const [hydrated, setHydrated] = useState(false)
-  const [records, setRecords] = useState<RecordEntry[]>([])
-  const [projects, setProjects] = useState<StoryProject[]>([])
+  // ─── API-backed state ──────────────────────────────────────────────────────
+  const {
+    records,
+    loading: recordsLoading,
+    createRecord,
+  } = useRecords()
+  const {
+    projects,
+    loading: projectsLoading,
+    createProject,
+    addEpisode,
+    updateEpisode,
+  } = useProjects()
+
+  // ─── UI state ─────────────────────────────────────────────────────────────
   const [activeView, setActiveView] = useState<ActiveView>("new-record")
   const [selectedRecordId, setSelectedRecordId] = useState<string>()
   const [selectedProjectId, setSelectedProjectId] = useState<string>()
@@ -65,35 +67,6 @@ export default function HomePage() {
   const [notice, setNotice] = useState("记录会先保存在本地。点击开始故事时，才会创建剧集项目。")
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-
-  useEffect(() => {
-    const hasRecords = window.localStorage.getItem(RECORDS_KEY)
-    const hasProjects = window.localStorage.getItem(PROJECTS_KEY)
-    const initialRecords = readCollection<RecordEntry>(
-      RECORDS_KEY,
-      hasRecords === null ? sampleRecords : [],
-    )
-    const initialProjects = readCollection<Partial<StoryProject>>(
-      PROJECTS_KEY,
-      hasProjects === null ? sampleProjects : [],
-    ).map(normalizeStoryProject)
-
-    setRecords(initialRecords)
-    setProjects(initialProjects)
-    setHydrated(true)
-  }, [])
-
-  useEffect(() => {
-    if (hydrated) {
-      writeRecords(records)
-    }
-  }, [hydrated, records])
-
-  useEffect(() => {
-    if (hydrated) {
-      writeProjects(projects)
-    }
-  }, [hydrated, projects])
 
   const sortedRecords = useMemo(
     () => [...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
@@ -191,37 +164,59 @@ export default function HomePage() {
     setSidebarOpen(false)
   }
 
-  function saveDraftRecord() {
-    const record = buildRecord(draftBody, draftCategory)
-    if (!record) {
+  async function saveDraftRecord() {
+    const cleanedBody = draftBody.trim()
+    if (!cleanedBody) {
       setNotice("先写下一段记录，再保存。")
       return
     }
-
-    setRecords((current) => [record, ...current])
-    setDraftBody("")
-    setSelectedRecordId(record.id)
-    setActiveView("record-detail")
-    setNotice("记录已保存。还没有创建项目。")
+    try {
+      const record = await createRecord({
+        title: deriveTitle(cleanedBody),
+        body: cleanedBody,
+        category: draftCategory,
+      })
+      setDraftBody("")
+      setSelectedRecordId(record.id)
+      setActiveView("record-detail")
+      setNotice("记录已保存。还没有创建项目。")
+    } catch (e) {
+      setNotice(`保存失败：${(e as Error).message}`)
+    }
   }
 
-  function startStoryFromDraft() {
-    const record = buildRecord(draftBody, draftCategory)
-    if (!record) {
+  async function startStoryFromDraft() {
+    const cleanedBody = draftBody.trim()
+    if (!cleanedBody) {
       setNotice("先写下一段记录，再开始故事。")
       return
     }
-
-    const project = buildProject(record)
-    setRecords((current) => [record, ...current])
-    setProjects((current) => [project, ...current])
-    setDraftBody("")
-    setSelectedProjectId(project.id)
-    setActiveView("project-detail")
-    setNotice("已从这条记录开始一个单集剧集项目。")
+    try {
+      const record = await createRecord({
+        title: deriveTitle(cleanedBody),
+        body: cleanedBody,
+        category: draftCategory,
+      })
+      const summary = deriveSummary(cleanedBody)
+      const project = await createProject({
+        title: record.title,
+        summary,
+        seriesTheme: summary,
+      })
+      await addEpisode(project.id, {
+        title: record.title,
+        rawContent: cleanedBody,
+      })
+      setDraftBody("")
+      setSelectedProjectId(project.id)
+      setActiveView("project-detail")
+      setNotice("已从这条记录开始一个单集剧集项目。")
+    } catch (e) {
+      setNotice(`创建项目失败：${(e as Error).message}`)
+    }
   }
 
-  function startStoryFromRecord(record: RecordEntry) {
+  async function startStoryFromRecord(record: RecordEntry) {
     const existingProject = sortedProjects.find((project) => project.sourceRecordId === record.id)
 
     if (existingProject) {
@@ -231,56 +226,38 @@ export default function HomePage() {
       return
     }
 
-    const project = buildProject(record)
-    setProjects((current) => [project, ...current])
-    setSelectedProjectId(project.id)
-    setActiveView("project-detail")
-    setNotice("已从这条记录开始一个单集剧集项目。")
+    try {
+      const summary = deriveSummary(record.body)
+      const project = await createProject({
+        title: record.title,
+        summary,
+        seriesTheme: summary,
+      })
+      await addEpisode(project.id, {
+        title: record.title,
+        rawContent: record.body,
+      })
+      setSelectedProjectId(project.id)
+      setActiveView("project-detail")
+      setNotice("已从这条记录开始一个单集剧集项目。")
+    } catch (e) {
+      setNotice(`创建项目失败：${(e as Error).message}`)
+    }
   }
 
-  function addEpisodeToProject(projectId: string) {
-    setProjects((current) =>
-      current.map((project) => {
-        if (project.id !== projectId) {
-          return project
-        }
-
-        const episodeNumber = project.episodes.length + 1
-        const episode = createStoryEpisode({
-          projectId: project.id,
-          episodeNumber,
-          title: `第 ${episodeNumber} 集`,
-          summary: `围绕「${project.title}」继续展开的新一集。`,
-          keywords: deriveKeywords(project.seriesTheme || project.summary),
-          emotionalTone: "待补充",
-          scriptDraft: "",
-        })
-
-        return {
-          ...project,
-          targetEpisodeCount: Math.max(project.targetEpisodeCount ?? 0, episodeNumber),
-          episodes: [...project.episodes, episode],
-        }
-      }),
-    )
-    setSelectedProjectId(projectId)
-  }
-
-  function updateEpisode(updatedEpisode: StoryEpisode) {
-    setProjects((current) =>
-      current.map((project) => {
-        if (project.id !== updatedEpisode.projectId) {
-          return project
-        }
-
-        return {
-          ...project,
-          episodes: project.episodes.map((episode) =>
-            episode.id === updatedEpisode.id ? updatedEpisode : episode,
-          ),
-        }
-      }),
-    )
+  async function addEpisodeToProject(projectId: string) {
+    const project = sortedProjects.find((p) => p.id === projectId)
+    if (!project) return
+    const episodeNumber = project.episodes.length + 1
+    try {
+      await addEpisode(projectId, {
+        title: `第 ${episodeNumber} 集`,
+        rawContent: "",
+      })
+      setSelectedProjectId(projectId)
+    } catch (e) {
+      setNotice(`添加集数失败：${(e as Error).message}`)
+    }
   }
 
   return (
@@ -1049,50 +1026,6 @@ function RecordCard({ record, onClick }: { record: RecordEntry; onClick: () => v
   )
 }
 
-function buildRecord(body: string, category: RecordCategory): RecordEntry | undefined {
-  const cleanedBody = body.trim()
-
-  if (!cleanedBody) {
-    return undefined
-  }
-
-  return {
-    id: createId("record"),
-    title: deriveTitle(cleanedBody),
-    body: cleanedBody,
-    category,
-    createdAt: new Date().toISOString(),
-  }
-}
-
-function buildProject(record: RecordEntry): StoryProject {
-  const projectId = createId("project")
-  const summary = deriveSummary(record.body)
-
-  return {
-    id: projectId,
-    title: record.title,
-    sourceRecordId: record.id,
-    summary,
-    seriesTheme: summary,
-    targetEpisodeCount: 1,
-    episodes: [
-      createStoryEpisode({
-        projectId,
-        episodeNumber: 1,
-        title: record.title,
-        summary,
-        keywords: deriveKeywords(record.body),
-        emotionalTone: "真实、私人、带有回忆感",
-        scriptDraft: summary,
-        payoffMoments: ["来自原始记录的情绪高点"],
-        plotBranches: ["真实记录版", "电影感增强版", "旁白回望版"],
-      }),
-    ],
-    status: "draft",
-    createdAt: new Date().toISOString(),
-  }
-}
 
 function deriveTitle(body: string) {
   const firstLine = body
@@ -1121,13 +1054,6 @@ function deriveKeywords(body: string) {
     .slice(0, 4)
 }
 
-function createId(prefix: string) {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `${prefix}-${crypto.randomUUID()}`
-  }
-
-  return `${prefix}-${Date.now()}`
-}
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("zh-CN", {

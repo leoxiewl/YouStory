@@ -24,6 +24,8 @@ import {
   workflowStageStatusLabels,
 } from "@/lib/workflow"
 import { StoryboardListEditor } from "./storyboard-list-editor"
+import { useAgent } from "@/lib/hooks/useAgent"
+import { episodesApi } from "@/lib/api"
 import type {
   EpisodeWorkflowStage,
   NovelToScriptResult,
@@ -204,6 +206,7 @@ function StageContent({
       {stage.stageId === "extract_characters_scenes" ? (
         <NovelToScriptWorkspace
           episode={episode}
+          project={project}
           sourceRecord={sourceRecord}
           onUpdateEpisode={onUpdateEpisode}
         />
@@ -491,17 +494,19 @@ function RewriteWorkspace({
 
 function NovelToScriptWorkspace({
   episode,
+  project,
   sourceRecord,
   onUpdateEpisode,
 }: {
   episode: StoryEpisode
+  project: StoryProject
   sourceRecord?: RecordEntry
   onUpdateEpisode: (episode: StoryEpisode) => void
 }) {
   const initialText = episode.novelToScript?.novelText || sourceRecord?.body || episode.script.draft || ""
   const [novelText, setNovelText] = useState(initialText)
-  const [generating, setGenerating] = useState(false)
   const [error, setError] = useState("")
+  const { running: generating, run: runAgent } = useAgent()
 
   useEffect(() => {
     setNovelText(episode.novelToScript?.novelText || sourceRecord?.body || episode.script.draft || "")
@@ -542,13 +547,19 @@ function NovelToScriptWorkspace({
 
   async function generateStoryboards() {
     const cleanedText = novelText.trim()
+    const episodeId = Number(episode.id)
+    const projectId = Number(project.id)
 
     if (!cleanedText) {
       setError("请输入小说文案后再拆解分镜。")
       return
     }
+    // 若 episodeId/projectId 不是合法数字（旧本地数据），降级到 Mock API
+    if (!episodeId || !projectId) {
+      setError("当前集数未连接到后端，请先保存项目后重试。")
+      return
+    }
 
-    setGenerating(true)
     setError("")
     onUpdateEpisode({
       ...episode,
@@ -562,38 +573,91 @@ function NovelToScriptWorkspace({
     })
 
     try {
-      const response = await fetch("/api/novel-to-script", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          episodeId: episode.id,
-          novelText: cleanedText,
-        }),
-      })
-      const data = (await response.json()) as { result?: NovelToScriptResult; error?: string }
+      // Step 1: story_adapter — 将原始内容改写为格式化剧本
+      await runAgent(
+        "story_adapter",
+        `请将以下内容改写为短剧剧本格式：\n\n${cleanedText}`,
+        projectId,
+        episodeId,
+      )
 
-      if (!response.ok || !data.result) {
-        throw new Error(data.error ?? "拆解失败，请稍后重试。")
+      // Step 2: world_builder — 提取角色和场景
+      await runAgent(
+        "world_builder",
+        "请从刚才保存的剧本中提取所有角色和场景，进行去重保存。",
+        projectId,
+        episodeId,
+      )
+
+      // Step 3: storyboard_breaker — 拆解分镜
+      await runAgent(
+        "storyboard_breaker",
+        "请根据剧本和角色场景信息，将剧本拆解为 6-10 个分镜序列并保存。",
+        projectId,
+        episodeId,
+      )
+
+      // Step 4: 从 API 重新加载 pipeline 状态，更新本地 state
+      const pipeline = await episodesApi.pipelineStatus(episodeId)
+      const scriptText = pipeline.episode.scriptContent ?? cleanedText
+
+      // 将 API storyboards 转换为前端 NovelToScriptResult 格式
+      const apiResult: NovelToScriptResult = {
+        characters: pipeline.characters.map((c) => ({
+          id: String(c.id),
+          name: c.name,
+          age: "",
+          appearance: c.appearance ?? c.description ?? "",
+          profile: c.personality ?? c.description ?? "",
+        })),
+        scenes: pipeline.scenes.map((s) => ({
+          id: String(s.id),
+          name: s.name,
+          environment: s.description ?? "",
+          prompt: s.imagePrompt ?? s.description ?? "",
+        })),
+        propsEffects: [],
+        storyboards: pipeline.storyboards.map((sb) => ({
+          id: String(sb.id),
+          shotNumber: String(sb.orderIndex + 1),
+          shotSize: sb.shotType ?? "medium",
+          durationSeconds: sb.duration ?? 5,
+          cameraAngle: sb.angle ?? undefined,
+          cameraMove: sb.movement ?? undefined,
+          location: undefined,
+          timeOfDay: undefined,
+          cameraLogic: sb.videoPrompt ?? "",
+          visualDescription: sb.imagePrompt ?? "",
+          action: sb.dialogue ?? undefined,
+          result: undefined,
+          atmosphere: sb.bgmNote ?? undefined,
+          prompt: sb.imagePrompt ?? "",
+          dialogue: sb.dialogue ?? "",
+          sound: sb.soundEffect ?? "",
+          characterIds: [],
+          sceneId: "",
+          propEffectIds: [],
+          reviewStatus: "original" as const,
+        })),
       }
 
       onUpdateEpisode({
         ...episode,
         script: {
           ...episode.script,
-          draft: formatScriptDraft(data.result),
+          draft: scriptText,
         },
         novelToScript: {
           novelText: cleanedText,
           status: "reviewing",
-          result: data.result,
+          result: apiResult,
           updatedAt: new Date().toISOString(),
         },
         workflow: updateWorkflowForScriptReview(episode.workflow, "reviewing"),
       })
     } catch (generationError) {
-      setError(generationError instanceof Error ? generationError.message : "拆解失败，请稍后重试。")
+      const msg = generationError instanceof Error ? generationError.message : "拆解失败，请稍后重试。"
+      setError(msg)
       onUpdateEpisode({
         ...episode,
         novelToScript: {
@@ -604,8 +668,6 @@ function NovelToScriptWorkspace({
         },
         workflow: updateWorkflowForScriptReview(episode.workflow, result ? "needs_revision" : "idle"),
       })
-    } finally {
-      setGenerating(false)
     }
   }
 
