@@ -1,11 +1,12 @@
 import { Agent } from '@mastra/core/agent'
-import { openai } from '@ai-sdk/openai'
-import { google } from '@ai-sdk/google'
+import { createOpenAI, openai } from '@ai-sdk/openai'
+import { createGoogleGenerativeAI, google } from '@ai-sdk/google'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
+import { getRuntimeAiConfig } from '../services/ai-configs.js'
 import { createStoryTools } from './tools/story-tools.js'
 import { createExtractTools } from './tools/extract-tools.js'
 import { createStoryboardTools } from './tools/storyboard-tools.js'
@@ -28,7 +29,23 @@ function loadSkill(type: AgentType): string {
 }
 
 function getModel(modelOverride?: string | null) {
-  const modelId = modelOverride ?? process.env.DEFAULT_TEXT_MODEL ?? 'gpt-4o'
+  const config = getRuntimeAiConfig('text')
+  const modelId = modelOverride ?? config?.model ?? process.env.DEFAULT_TEXT_MODEL ?? 'gpt-4o'
+
+  if ((config?.provider === 'gemini' || modelId.startsWith('gemini')) && config?.apiKey) {
+    return createGoogleGenerativeAI({
+      apiKey: config.apiKey,
+      baseURL: config.baseUrl ?? undefined,
+    })(modelId)
+  }
+
+  if (config?.provider === 'openai' && config.apiKey) {
+    return createOpenAI({
+      apiKey: config.apiKey,
+      baseURL: config.baseUrl ?? undefined,
+    })(modelId)
+  }
+
   if (modelId.startsWith('gemini')) return google(modelId)
   return openai(modelId)
 }

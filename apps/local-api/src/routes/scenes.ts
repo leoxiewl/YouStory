@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { ok, err, notFound } from '../utils/response.js'
+import { generatePlaceholderImage } from '../services/local-media.js'
 
 const router = new Hono()
 
@@ -52,13 +53,25 @@ router.put('/:id', async (c) => {
   }
 })
 
-// 生成场景图片（占位）
+// 生成场景图片（本地占位图片）
 router.post('/:id/generate-image', async (c) => {
   try {
     const id = Number(c.req.param('id'))
     const scene = db.select().from(schema.scenes).where(eq(schema.scenes.id, id)).get()
     if (!scene) return notFound(c)
-    return ok(c, { message: 'Image generation queued', sceneId: id })
+
+    const image = await generatePlaceholderImage(
+      'scene',
+      id,
+      scene.name,
+      scene.imagePrompt ?? scene.description ?? scene.atmosphere ?? 'YouStorys scene',
+    )
+    db.update(schema.scenes).set({
+      imageUrl: image.url,
+      updatedAt: new Date().toISOString(),
+    }).where(eq(schema.scenes.id, id)).run()
+
+    return ok(c, { message: 'Image generated', sceneId: id, imageUrl: image.url })
   } catch (e) {
     return err(c, (e as Error).message)
   }

@@ -2,6 +2,11 @@ import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { ok, err, notFound } from '../utils/response.js'
+import {
+  generatePlaceholderImage,
+  generateSilentAudio,
+  generateStoryboardVideo,
+} from '../services/local-media.js'
 
 const router = new Hono()
 
@@ -76,37 +81,91 @@ router.delete('/:id', async (c) => {
   }
 })
 
-// TTS 配音生成（占位）
+// TTS 配音生成（本地静音音轨占位，用于跑通合成链路）
 router.post('/:id/generate-tts', async (c) => {
   try {
     const id = Number(c.req.param('id'))
     const sb = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).get()
     if (!sb) return notFound(c)
-    return ok(c, { message: 'TTS queued', storyboardId: id })
+
+    const audio = await generateSilentAudio(sb)
+    db.update(schema.storyboards).set({
+      ttsAudioUrl: audio.url,
+      updatedAt: new Date().toISOString(),
+    }).where(eq(schema.storyboards.id, id)).run()
+
+    return ok(c, { message: 'TTS generated', storyboardId: id, audioUrl: audio.url })
   } catch (e) {
     return err(c, (e as Error).message)
   }
 })
 
-// 分镜图片生成（占位）
+// 分镜图片生成（本地占位图片）
 router.post('/:id/generate-image', async (c) => {
   try {
     const id = Number(c.req.param('id'))
     const sb = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).get()
     if (!sb) return notFound(c)
-    return ok(c, { message: 'Image generation queued', storyboardId: id })
+
+    const image = await generatePlaceholderImage(
+      'storyboard',
+      id,
+      `分镜 ${sb.orderIndex + 1}`,
+      sb.imagePrompt ?? sb.videoPrompt ?? sb.dialogue ?? sb.narration ?? 'YouStorys storyboard',
+    )
+    db.update(schema.storyboards).set({
+      imageUrl: image.url,
+      status: 'completed',
+      updatedAt: new Date().toISOString(),
+    }).where(eq(schema.storyboards.id, id)).run()
+
+    return ok(c, { message: 'Image generated', storyboardId: id, imageUrl: image.url })
   } catch (e) {
     return err(c, (e as Error).message)
   }
 })
 
-// 分镜视频生成（占位）
+// 分镜视频生成（本地图片转视频）
 router.post('/:id/generate-video', async (c) => {
   try {
     const id = Number(c.req.param('id'))
     const sb = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).get()
     if (!sb) return notFound(c)
-    return ok(c, { message: 'Video generation queued', storyboardId: id })
+
+    let storyboard = sb
+    if (!storyboard.imageUrl) {
+      const image = await generatePlaceholderImage(
+        'storyboard',
+        id,
+        `分镜 ${sb.orderIndex + 1}`,
+        sb.imagePrompt ?? sb.videoPrompt ?? sb.dialogue ?? sb.narration ?? 'YouStorys storyboard',
+      )
+      db.update(schema.storyboards).set({
+        imageUrl: image.url,
+        updatedAt: new Date().toISOString(),
+      }).where(eq(schema.storyboards.id, id)).run()
+      storyboard = { ...storyboard, imageUrl: image.url }
+    }
+
+    const video = await generateStoryboardVideo(storyboard)
+    db.update(schema.storyboards).set({
+      videoUrl: video.url,
+      status: 'completed',
+      updatedAt: new Date().toISOString(),
+    }).where(eq(schema.storyboards.id, id)).run()
+
+    db.insert(schema.videoGenerations).values({
+      storyboardId: id,
+      provider: 'local',
+      model: 'ffmpeg-placeholder',
+      prompt: sb.videoPrompt ?? sb.imagePrompt ?? '',
+      duration: sb.duration,
+      status: 'completed',
+      videoUrl: video.url,
+      localPath: video.localPath,
+    }).run()
+
+    return ok(c, { message: 'Video generated', storyboardId: id, videoUrl: video.url })
   } catch (e) {
     return err(c, (e as Error).message)
   }

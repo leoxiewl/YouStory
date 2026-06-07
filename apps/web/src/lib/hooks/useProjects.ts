@@ -140,7 +140,8 @@ export function useProjects() {
         await episodesApi.update(Number(updatedEpisode.id), {
           title: updatedEpisode.title,
           summary: updatedEpisode.summary,
-          rawContent: updatedEpisode.script?.draft ?? undefined,
+          rawContent: updatedEpisode.novelToScript?.novelText ?? undefined,
+          scriptContent: updatedEpisode.script?.draft ?? undefined,
         })
       } catch (e) {
         console.warn("Failed to sync episode to API:", e)
