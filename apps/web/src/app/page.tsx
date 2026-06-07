@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import clsx from "clsx"
 import {
   Archive,
@@ -10,16 +10,20 @@ import {
   ChevronDown,
   Clapperboard,
   ImagePlus,
+  KeyRound,
   List,
   Menu,
   Mic,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  Save,
   Search,
+  Settings,
   X,
 } from "lucide-react"
 import { EpisodeWorkflowView } from "./episode-workflow-view"
+import { aiConfigsApi, type ApiAiConfig, type ApiAiServiceType } from "@/lib/api"
 import { useRecords } from "@/lib/hooks/useRecords"
 import { useProjects } from "@/lib/hooks/useProjects"
 import type {
@@ -164,6 +168,14 @@ export default function HomePage() {
     setSidebarOpen(false)
   }
 
+  function openApiSettings() {
+    setActiveView("api-settings")
+    setSelectedRecordId(undefined)
+    setSelectedProjectId(undefined)
+    setSelectedEpisodeId(undefined)
+    setSidebarOpen(false)
+  }
+
   async function saveDraftRecord() {
     const cleanedBody = draftBody.trim()
     if (!cleanedBody) {
@@ -280,6 +292,7 @@ export default function HomePage() {
           onNewRecord={openNewRecord}
           onRecordList={openRecordList}
           onSearch={openSearch}
+          onOpenSettings={openApiSettings}
           onOpenProject={openProject}
         />
       ) : null}
@@ -295,6 +308,7 @@ export default function HomePage() {
           onNewRecord={openNewRecord}
           onRecordList={openRecordList}
           onSearch={openSearch}
+          onOpenSettings={openApiSettings}
           onOpenProject={openProject}
         />
       ) : null}
@@ -375,6 +389,10 @@ export default function HomePage() {
               onSearchTermChange={setSearchTerm}
             />
           )}
+
+          {activeView === "api-settings" && (
+            <ApiSettingsView />
+          )}
         </div>
       </section>
     </main>
@@ -392,6 +410,7 @@ function Sidebar({
   onNewRecord,
   onRecordList,
   onSearch,
+  onOpenSettings,
   onOpenProject,
 }: {
   activeView: ActiveView
@@ -404,6 +423,7 @@ function Sidebar({
   onNewRecord: () => void
   onRecordList: () => void
   onSearch: () => void
+  onOpenSettings: () => void
   onOpenProject: (projectId: string) => void
 }) {
   return (
@@ -465,6 +485,13 @@ function Sidebar({
           label="搜索"
           collapsed={collapsed}
           onClick={onSearch}
+        />
+        <NavButton
+          active={activeView === "api-settings"}
+          icon={<Settings size={20} />}
+          label="API 配置"
+          collapsed={collapsed}
+          onClick={onOpenSettings}
         />
       </nav>
 
@@ -531,6 +558,7 @@ function MobileSidebarDrawer({
   onNewRecord,
   onRecordList,
   onSearch,
+  onOpenSettings,
   onOpenProject,
 }: {
   activeView: ActiveView
@@ -542,6 +570,7 @@ function MobileSidebarDrawer({
   onNewRecord: () => void
   onRecordList: () => void
   onSearch: () => void
+  onOpenSettings: () => void
   onOpenProject: (projectId: string) => void
 }) {
   return (
@@ -577,6 +606,7 @@ function MobileSidebarDrawer({
           onNewRecord={onNewRecord}
           onRecordList={onRecordList}
           onSearch={onSearch}
+          onOpenSettings={onOpenSettings}
           onOpenProject={onOpenProject}
         />
       </div>
@@ -603,11 +633,15 @@ function TopBar({
         : activeView === "record-list"
           ? "记录列表"
           : activeView === "search"
-            ? "搜索"
-            : "新记录"
+          ? "搜索"
+          : activeView === "api-settings"
+            ? "API 配置"
+          : "新记录"
   const titleIcon =
     (activeView === "project-detail" || activeView === "episode-workflow") && selectedProject ? (
       <Clapperboard size={18} />
+    ) : activeView === "api-settings" ? (
+      <Settings size={18} />
     ) : (
       <Archive size={18} />
     )
@@ -722,6 +756,293 @@ function NewRecordView({
       <p className="max-w-2xl text-center text-sm text-quiet">{notice}</p>
     </div>
   )
+}
+
+type AiConfigDraft = {
+  id?: number
+  serviceType: ApiAiServiceType
+  provider: string
+  name: string
+  baseUrl: string
+  apiKey: string
+  model: string
+  isActive: boolean
+  hasApiKey: boolean
+}
+
+const aiServiceDefinitions: Array<{
+  serviceType: ApiAiServiceType
+  title: string
+  description: string
+  providers: string[]
+  defaultProvider: string
+  defaultModel: string
+}> = [
+  {
+    serviceType: "text",
+    title: "文本模型",
+    description: "用于小说改写、角色场景提取和分镜拆解。",
+    providers: ["openai", "gemini"],
+    defaultProvider: "openai",
+    defaultModel: "gpt-4o",
+  },
+  {
+    serviceType: "tts",
+    title: "语音模型",
+    description: "用于角色试音、旁白和对白配音。",
+    providers: ["minimax", "local"],
+    defaultProvider: "minimax",
+    defaultModel: "speech-02-hd",
+  },
+  {
+    serviceType: "image",
+    title: "生图模型",
+    description: "用于角色形象、场景图和分镜首帧。",
+    providers: ["openai", "gemini", "minimax", "volcengine", "aliyun", "local"],
+    defaultProvider: "openai",
+    defaultModel: "gpt-image-1",
+  },
+  {
+    serviceType: "video",
+    title: "生视频模型",
+    description: "用于分镜图生视频和镜头片段生成。",
+    providers: ["minimax", "volcengine", "vidu", "aliyun", "local"],
+    defaultProvider: "minimax",
+    defaultModel: "video-01",
+  },
+]
+
+function ApiSettingsView() {
+  const [drafts, setDrafts] = useState<AiConfigDraft[]>(() => aiServiceDefinitions.map(createEmptyAiDraft))
+  const [loading, setLoading] = useState(true)
+  const [savingType, setSavingType] = useState<ApiAiServiceType | null>(null)
+  const [message, setMessage] = useState("配置会保存在本地数据库，默认模式生产时自动读取。")
+
+  useEffect(() => {
+    let mounted = true
+
+    async function loadConfigs() {
+      setLoading(true)
+      try {
+        const defaults = await aiConfigsApi.defaults()
+        if (!mounted) return
+
+        setDrafts(aiServiceDefinitions.map((definition, index) =>
+          toAiDraft(defaults[index], definition),
+        ))
+        setMessage("已载入当前默认 API 配置。")
+      } catch (e) {
+        setMessage(`配置读取失败：${(e as Error).message}`)
+      } finally {
+        if (mounted) setLoading(false)
+      }
+    }
+
+    loadConfigs()
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  function updateDraft(serviceType: ApiAiServiceType, patch: Partial<AiConfigDraft>) {
+    setDrafts((current) =>
+      current.map((draft) =>
+        draft.serviceType === serviceType ? { ...draft, ...patch } : draft,
+      ),
+    )
+  }
+
+  async function saveDraft(draft: AiConfigDraft) {
+    setSavingType(draft.serviceType)
+    setMessage("")
+
+    const payload = {
+      serviceType: draft.serviceType,
+      provider: draft.provider,
+      name: draft.name.trim() || `${getServiceDefinition(draft.serviceType).title}默认配置`,
+      baseUrl: draft.baseUrl.trim() || null,
+      model: draft.model.trim() || null,
+      isDefault: true,
+      isActive: draft.isActive,
+      ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
+    }
+
+    try {
+      const saved = draft.id
+        ? await aiConfigsApi.update(draft.id, payload)
+        : await aiConfigsApi.create({
+            ...payload,
+            name: payload.name,
+            provider: payload.provider,
+            serviceType: payload.serviceType,
+          })
+
+      const definition = getServiceDefinition(draft.serviceType)
+      updateDraft(draft.serviceType, toAiDraft(saved, definition))
+      setMessage(`${definition.title}配置已保存。`)
+    } catch (e) {
+      setMessage(`保存失败：${(e as Error).message}`)
+    } finally {
+      setSavingType(null)
+    }
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-6xl">
+      <SectionIntro
+        eyebrow="设置"
+        title="API Key 配置"
+        description="为文本、语音、生图和生视频服务配置默认供应商。默认模式短剧生产会自动读取这些配置；当前本地媒体链路也会在没有外部素材服务时生成可预览占位资源。"
+      />
+
+      <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-line bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-paper text-story">
+            <KeyRound size={18} />
+          </div>
+          <div>
+            <p className="font-medium">默认模式配置状态</p>
+            <p className="mt-1 text-sm text-quiet">{loading ? "正在读取配置..." : message}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-4 lg:grid-cols-2">
+        {drafts.map((draft) => {
+          const definition = getServiceDefinition(draft.serviceType)
+          const saving = savingType === draft.serviceType
+
+          return (
+            <section className="rounded-[22px] border border-line bg-white p-5 shadow-sm" key={draft.serviceType}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-semibold">{definition.title}</h2>
+                  <p className="mt-2 text-sm leading-6 text-quiet">{definition.description}</p>
+                </div>
+                <span className={clsx(
+                  "shrink-0 rounded-full px-3 py-1 text-xs font-medium",
+                  draft.hasApiKey ? "bg-emerald-100 text-emerald-700" : "bg-neutral-100 text-neutral-600",
+                )}>
+                  {draft.hasApiKey ? "已保存 Key" : "未保存 Key"}
+                </span>
+              </div>
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-medium text-quiet">配置名称</span>
+                  <input
+                    className="w-full rounded-xl border border-line bg-[#fbfbfa] px-3 py-2 text-sm outline-none transition focus:border-ink focus:bg-white"
+                    onChange={(event) => updateDraft(draft.serviceType, { name: event.target.value })}
+                    value={draft.name}
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-medium text-quiet">供应商</span>
+                  <select
+                    className="w-full rounded-xl border border-line bg-[#fbfbfa] px-3 py-2 text-sm outline-none transition focus:border-ink focus:bg-white"
+                    onChange={(event) => updateDraft(draft.serviceType, { provider: event.target.value })}
+                    value={draft.provider}
+                  >
+                    {definition.providers.map((provider) => (
+                      <option key={provider} value={provider}>
+                        {provider}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-medium text-quiet">模型</span>
+                  <input
+                    className="w-full rounded-xl border border-line bg-[#fbfbfa] px-3 py-2 text-sm outline-none transition focus:border-ink focus:bg-white"
+                    onChange={(event) => updateDraft(draft.serviceType, { model: event.target.value })}
+                    placeholder={definition.defaultModel}
+                    value={draft.model}
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-medium text-quiet">API Key</span>
+                  <input
+                    className="w-full rounded-xl border border-line bg-[#fbfbfa] px-3 py-2 text-sm outline-none transition focus:border-ink focus:bg-white"
+                    onChange={(event) => updateDraft(draft.serviceType, { apiKey: event.target.value })}
+                    placeholder={draft.hasApiKey ? "留空则沿用已保存 Key" : "粘贴 API Key"}
+                    type="password"
+                    value={draft.apiKey}
+                  />
+                </label>
+              </div>
+
+              <label className="mt-3 block">
+                <span className="mb-1.5 block text-xs font-medium text-quiet">Base URL</span>
+                <input
+                  className="w-full rounded-xl border border-line bg-[#fbfbfa] px-3 py-2 text-sm outline-none transition focus:border-ink focus:bg-white"
+                  onChange={(event) => updateDraft(draft.serviceType, { baseUrl: event.target.value })}
+                  placeholder="默认可留空；兼容 OpenAI 的代理地址可填 https://.../v1"
+                  value={draft.baseUrl}
+                />
+              </label>
+
+              <div className="mt-4 flex items-center justify-between gap-3">
+                <label className="inline-flex items-center gap-2 text-sm text-quiet">
+                  <input
+                    checked={draft.isActive}
+                    className="h-4 w-4 accent-ink"
+                    onChange={(event) => updateDraft(draft.serviceType, { isActive: event.target.checked })}
+                    type="checkbox"
+                  />
+                  启用为默认配置
+                </label>
+                <button
+                  className="inline-flex items-center gap-2 rounded-full bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-55"
+                  disabled={saving}
+                  onClick={() => saveDraft(draft)}
+                  type="button"
+                >
+                  <Save size={16} />
+                  {saving ? "保存中" : "保存配置"}
+                </button>
+              </div>
+            </section>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function createEmptyAiDraft(definition: (typeof aiServiceDefinitions)[number]): AiConfigDraft {
+  return {
+    serviceType: definition.serviceType,
+    provider: definition.defaultProvider,
+    name: `${definition.title}默认配置`,
+    baseUrl: "",
+    apiKey: "",
+    model: definition.defaultModel,
+    isActive: true,
+    hasApiKey: false,
+  }
+}
+
+function toAiDraft(
+  config: ApiAiConfig | null,
+  definition: (typeof aiServiceDefinitions)[number],
+): AiConfigDraft {
+  if (!config) return createEmptyAiDraft(definition)
+
+  return {
+    id: config.id,
+    serviceType: config.serviceType,
+    provider: config.provider,
+    name: config.name,
+    baseUrl: config.baseUrl ?? "",
+    apiKey: "",
+    model: config.model ?? definition.defaultModel,
+    isActive: config.isActive,
+    hasApiKey: Boolean(config.hasApiKey ?? config.apiKey),
+  }
+}
+
+function getServiceDefinition(serviceType: ApiAiServiceType) {
+  return aiServiceDefinitions.find((definition) => definition.serviceType === serviceType) ?? aiServiceDefinitions[0]
 }
 
 function RecordListView({

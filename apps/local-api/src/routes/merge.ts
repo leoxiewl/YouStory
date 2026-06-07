@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { ok, err, notFound } from '../utils/response.js'
+import { mergeEpisodeVideos } from '../services/local-media.js'
 
 const router = new Hono()
 
@@ -18,9 +19,20 @@ router.post('/episodes/:id/merge', async (c) => {
     }).run()
     const mergeId = Number(result.lastInsertRowid)
 
-    // TODO: 接入 ffmpeg-merge.ts 服务（fire-and-forget）
+    const storyboards = db.select().from(schema.storyboards)
+      .where(eq(schema.storyboards.episodeId, id))
+      .orderBy(schema.storyboards.orderIndex)
+      .all()
 
-    return ok(c, { id: mergeId, status: 'processing', episodeId: id })
+    const merged = await mergeEpisodeVideos(id, storyboards)
+    db.update(schema.videoMerges).set({
+      status: 'completed',
+      mergedUrl: merged.url,
+      localPath: merged.localPath,
+      updatedAt: new Date().toISOString(),
+    }).where(eq(schema.videoMerges.id, mergeId)).run()
+
+    return ok(c, { id: mergeId, status: 'completed', episodeId: id, mergedUrl: merged.url })
   } catch (e) {
     return err(c, (e as Error).message)
   }

@@ -102,6 +102,7 @@ export type SceneProductionAsset = {
 
 export type StoryboardProductionAsset = {
   ttsStatus?: LocalProductionStatus
+  ttsAudioUrl?: string
   firstFrameStatus?: LocalProductionStatus
   firstFrameUrl?: string
   firstFrameLabel?: string
@@ -109,12 +110,15 @@ export type StoryboardProductionAsset = {
   lastFrameUrl?: string
   lastFrameLabel?: string
   videoStatus?: LocalProductionStatus
+  videoUrl?: string
+  composedVideoUrl?: string
   updatedAt?: string
 }
 
 export type ExportProductionAsset = {
   status: LocalProductionStatus
   title?: string
+  url?: string
   generatedAt?: string
 }
 
@@ -191,4 +195,5 @@ export type ActiveView =
   | "record-detail"
   | "project-detail"
   | "episode-workflow"
+  | "api-settings"
   | "search"

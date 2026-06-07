@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { ok, err, notFound } from '../utils/response.js'
+import { composeStoryboardVideo } from '../services/local-media.js'
 
 const router = new Hono()
 
@@ -14,8 +15,14 @@ router.post('/storyboards/:id/compose', async (c) => {
 
     if (!sb.videoUrl) return err(c, 'No video URL for this storyboard', 400)
 
-    // TODO: 接入 ffmpeg-compose.ts 服务
-    return ok(c, { message: 'Compose queued', storyboardId: id, status: 'processing' })
+    const composed = await composeStoryboardVideo(sb)
+    db.update(schema.storyboards).set({
+      composedVideoUrl: composed.url,
+      status: 'completed',
+      updatedAt: new Date().toISOString(),
+    }).where(eq(schema.storyboards.id, id)).run()
+
+    return ok(c, { message: 'Composed', storyboardId: id, composedVideoUrl: composed.url })
   } catch (e) {
     return err(c, (e as Error).message)
   }
@@ -33,8 +40,20 @@ router.post('/episodes/:id/compose-all', async (c) => {
       .orderBy(schema.storyboards.orderIndex)
       .all()
 
-    // TODO: 批量调用 ffmpeg-compose.ts
-    return ok(c, { message: 'Batch compose queued', episodeId: id, count: storyboards.length })
+    const composed: Array<{ storyboardId: number; composedVideoUrl: string }> = []
+    for (const storyboard of storyboards) {
+      if (!storyboard.videoUrl) continue
+
+      const result = await composeStoryboardVideo(storyboard)
+      db.update(schema.storyboards).set({
+        composedVideoUrl: result.url,
+        status: 'completed',
+        updatedAt: new Date().toISOString(),
+      }).where(eq(schema.storyboards.id, storyboard.id)).run()
+      composed.push({ storyboardId: storyboard.id, composedVideoUrl: result.url })
+    }
+
+    return ok(c, { message: 'Batch composed', episodeId: id, count: composed.length, composed })
   } catch (e) {
     return err(c, (e as Error).message)
   }

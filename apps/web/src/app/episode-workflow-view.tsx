@@ -25,9 +25,10 @@ import {
 } from "@/lib/workflow"
 import { StoryboardListEditor } from "./storyboard-list-editor"
 import { useAgent } from "@/lib/hooks/useAgent"
-import { episodesApi } from "@/lib/api"
+import { composeApi, episodesApi, mergeApi, pipelineApi, storyboardsApi, type ApiPipelineRunResult, type ApiPipelineStatus } from "@/lib/api"
 import type {
   EpisodeWorkflowStage,
+  EpisodeProductionState,
   NovelToScriptResult,
   RecordEntry,
   ScriptCharacter,
@@ -507,6 +508,7 @@ function NovelToScriptWorkspace({
   const [novelText, setNovelText] = useState(initialText)
   const [error, setError] = useState("")
   const { running: generating, run: runAgent } = useAgent()
+  const [pipelineRunning, setPipelineRunning] = useState(false)
 
   useEffect(() => {
     setNovelText(episode.novelToScript?.novelText || sourceRecord?.body || episode.script.draft || "")
@@ -515,7 +517,7 @@ function NovelToScriptWorkspace({
 
   const novelState = episode.novelToScript
   const result = novelState?.result
-  const status = generating ? "generating" : novelState?.status ?? "idle"
+  const status = generating || pipelineRunning ? "generating" : novelState?.status ?? "idle"
 
   function persistNovelText(nextText: string) {
     setNovelText(nextText)
@@ -671,6 +673,69 @@ function NovelToScriptWorkspace({
     }
   }
 
+  async function runDefaultProduction() {
+    const cleanedText = novelText.trim()
+    const episodeId = Number(episode.id)
+
+    if (!cleanedText) {
+      setError("请输入小说文案后再一键生产。")
+      return
+    }
+    if (!episodeId) {
+      setError("当前集数未连接到后端，请先保存项目后重试。")
+      return
+    }
+
+    setError("")
+    setPipelineRunning(true)
+    onUpdateEpisode({
+      ...episode,
+      novelToScript: {
+        novelText: cleanedText,
+        status: "generating",
+        result,
+        updatedAt: new Date().toISOString(),
+      },
+      workflow: updateWorkflowForScriptReview(episode.workflow, "generating"),
+    })
+
+    try {
+      const pipeline = await pipelineApi.runDefault(episodeId, { novelText: cleanedText })
+      const nextResult = pipelineStatusToNovelResult(pipeline)
+      const generatedAt = new Date().toISOString()
+
+      onUpdateEpisode({
+        ...episode,
+        script: {
+          ...episode.script,
+          draft: pipeline.episode.scriptContent ?? formatScriptDraft(nextResult),
+        },
+        novelToScript: {
+          novelText: cleanedText,
+          status: "approved",
+          result: nextResult,
+          updatedAt: generatedAt,
+        },
+        production: pipelineStatusToProduction(pipeline, generatedAt),
+        workflow: markDefaultPipelineWorkflowApproved(episode.workflow, pipeline),
+      })
+    } catch (pipelineError) {
+      setError(pipelineError instanceof Error ? pipelineError.message : "默认模式生产失败。")
+      onUpdateEpisode({
+        ...episode,
+        novelToScript: {
+          novelText: cleanedText,
+          status: result ? "needs_revision" : "idle",
+          result,
+          updatedAt: new Date().toISOString(),
+        },
+        workflow: updateWorkflowForScriptReview(episode.workflow, result ? "needs_revision" : "idle"),
+      })
+    } finally {
+      setPipelineRunning(false)
+    }
+  }
+
   function confirmStoryboards() {
     if (!result) {
       setError("请先拆解出分镜脚本，再确认。")
@@ -744,7 +809,7 @@ function NovelToScriptWorkspace({
           <div className="flex shrink-0 items-center gap-2">
             <button
               className="inline-flex items-center gap-2 rounded-full border border-line bg-white px-4 py-2 text-sm font-medium text-ink transition hover:border-ink disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={generating}
+              disabled={generating || pipelineRunning}
               onClick={generateStoryboards}
               type="button"
             >
@@ -752,8 +817,17 @@ function NovelToScriptWorkspace({
               一键拆解分镜
             </button>
             <button
+              className="inline-flex items-center gap-2 rounded-full border border-line bg-white px-4 py-2 text-sm font-medium text-ink transition hover:border-ink disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={generating || pipelineRunning}
+              onClick={runDefaultProduction}
+              type="button"
+            >
+              {pipelineRunning ? <Loader2 className="animate-spin" size={16} /> : <Video size={16} />}
+              默认模式一键生产
+            </button>
+            <button
               className="inline-flex items-center gap-2 rounded-full bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-55"
-              disabled={!result}
+              disabled={!result || pipelineRunning}
               onClick={confirmStoryboards}
               type="button"
             >
@@ -1315,6 +1389,7 @@ function StoryboardAssetWorkspace({
     filter ? filter(storyboard) : true,
   )
   const production = ensureProductionState(episode)
+  const [error, setError] = useState("")
 
   function getStatus(storyboardId: string) {
     const asset = production.storyboardAssets[storyboardId]
@@ -1326,23 +1401,46 @@ function StoryboardAssetWorkspace({
     return asset?.[field] ?? "idle"
   }
 
-  function generateAsset(storyboardId: string) {
+  async function generateAsset(storyboardId: string) {
+    const numericStoryboardId = Number(storyboardId)
+    if (!numericStoryboardId) {
+      setError("这个分镜还没有保存到后端，无法生成真实素材。")
+      return
+    }
+
+    setError("")
+    let generatedUrl: string | undefined
+    try {
+      if (field === "ttsStatus") {
+        generatedUrl = (await storyboardsApi.generateTts(numericStoryboardId)).audioUrl
+      } else if (field === "frameStatus") {
+        generatedUrl = (await storyboardsApi.generateImage(numericStoryboardId)).imageUrl
+      } else {
+        generatedUrl = (await storyboardsApi.generateVideo(numericStoryboardId)).videoUrl
+      }
+    } catch (assetError) {
+      setError(assetError instanceof Error ? assetError.message : "素材生成失败。")
+      return
+    }
+
     const current = production.storyboardAssets[storyboardId] ?? {}
     const nextStoryboardAsset =
       field === "frameStatus"
         ? {
             ...current,
             firstFrameStatus: "ready" as const,
-            firstFrameUrl: createStoryboardFrameDataUrl(storyboardId, "首帧"),
+            firstFrameUrl: generatedUrl ?? createStoryboardFrameDataUrl(storyboardId, "首帧"),
             firstFrameLabel: "首帧参考图",
             lastFrameStatus: "ready" as const,
-            lastFrameUrl: createStoryboardFrameDataUrl(storyboardId, "尾帧"),
+            lastFrameUrl: generatedUrl ?? createStoryboardFrameDataUrl(storyboardId, "尾帧"),
             lastFrameLabel: "尾帧参考图",
             updatedAt: new Date().toISOString(),
           }
         : {
             ...current,
             [field]: "ready" as const,
+            ...(field === "ttsStatus" ? { ttsAudioUrl: generatedUrl } : {}),
+            ...(field === "videoStatus" ? { videoUrl: generatedUrl } : {}),
             updatedAt: new Date().toISOString(),
           }
     const nextProduction = {
@@ -1371,7 +1469,13 @@ function StoryboardAssetWorkspace({
     })
   }
 
-  function generateAllAssets() {
+  async function generateAllAssets() {
+    for (const storyboard of storyboards) {
+      await generateAsset(storyboard.id)
+    }
+  }
+
+  function markAllAssetsReady() {
     const nextAssets = { ...production.storyboardAssets }
     storyboards.forEach((storyboard) => {
       const current = nextAssets[storyboard.id] ?? {}
@@ -1410,21 +1514,28 @@ function StoryboardAssetWorkspace({
   }
 
   return (
-    <AssetGrid
-      emptyText={emptyText}
-      icon={icon}
-      items={storyboards.map((storyboard, index) => ({
-        id: storyboard.id,
-        title: `${storyboard.shotNumber || `分镜 ${index + 1}`} · ${storyboard.shotSize}`,
-        body: storyboard.visualDescription || storyboard.dialogue || storyboard.prompt,
-        status: getStatus(storyboard.id),
-        label: getStatus(storyboard.id) === "ready" ? readyOutput : undefined,
-      }))}
-      title={title}
-      generateLabel={buttonLabel}
-      onGenerate={generateAsset}
-      onGenerateAll={generateAllAssets}
-    />
+    <>
+      <AssetGrid
+        emptyText={emptyText}
+        icon={icon}
+        items={storyboards.map((storyboard, index) => ({
+          id: storyboard.id,
+          title: `${storyboard.shotNumber || `分镜 ${index + 1}`} · ${storyboard.shotSize}`,
+          body: storyboard.visualDescription || storyboard.dialogue || storyboard.prompt,
+          status: getStatus(storyboard.id),
+          label: getStatus(storyboard.id) === "ready" ? readyOutput : undefined,
+        }))}
+        title={title}
+        generateLabel={buttonLabel}
+        onGenerate={generateAsset}
+        onGenerateAll={storyboards.every((storyboard) => Number(storyboard.id)) ? generateAllAssets : markAllAssetsReady}
+      />
+      {error ? (
+        <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          {error}
+        </div>
+      ) : null}
+    </>
   )
 }
 
@@ -1438,14 +1549,42 @@ function ComposeExportWorkspace({
   onUpdateEpisode: (episode: StoryEpisode) => void
 }) {
   const production = ensureProductionState(episode)
+  const [error, setError] = useState("")
+  const [exporting, setExporting] = useState(false)
   const storyboards = episode.novelToScript?.result?.storyboards ?? []
   const videosReady = storyboards.length > 0 && storyboards.every((storyboard) => {
     return production.storyboardAssets[storyboard.id]?.videoStatus === "ready"
   })
   const exportReady = production.export?.status === "ready"
 
-  function composeExport() {
+  async function composeExport() {
+    const episodeId = Number(episode.id)
+    if (!episodeId) {
+      setError("当前集数未连接到后端，无法合成真实视频。")
+      return
+    }
+
+    setError("")
+    setExporting(true)
     const generatedAt = new Date().toISOString()
+    let mergedUrl: string | undefined
+
+    try {
+      const composeResult = await composeApi.episode(episodeId)
+      composeResult.composed?.forEach((item) => {
+        production.storyboardAssets[String(item.storyboardId)] = {
+          ...production.storyboardAssets[String(item.storyboardId)],
+          composedVideoUrl: item.composedVideoUrl,
+          updatedAt: generatedAt,
+        }
+      })
+      const mergeResult = await mergeApi.episode(episodeId)
+      mergedUrl = mergeResult.mergedUrl
+    } catch (composeError) {
+      setExporting(false)
+      setError(composeError instanceof Error ? composeError.message : "合成失败。")
+      return
+    }
 
     onUpdateEpisode({
       ...episode,
@@ -1453,7 +1592,8 @@ function ComposeExportWorkspace({
         ...production,
         export: {
           status: "ready",
-          title: `${episode.title} 本地成片占位`,
+          title: `${episode.title} 本地成片`,
+          url: mergedUrl,
           generatedAt,
         },
         updatedAt: generatedAt,
@@ -1464,6 +1604,7 @@ function ComposeExportWorkspace({
         outputs: ["本地成片"],
       }),
     })
+    setExporting(false)
   }
 
   return (
@@ -1480,11 +1621,11 @@ function ComposeExportWorkspace({
         </div>
         <button
           className="inline-flex items-center gap-2 rounded-full bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-55"
-          disabled={!videosReady}
+          disabled={!videosReady || exporting}
           onClick={composeExport}
           type="button"
         >
-          <Download size={16} />
+          {exporting ? <Loader2 className="animate-spin" size={16} /> : <Download size={16} />}
           {exportReady ? "重新合成" : "合成本集"}
         </button>
       </div>
@@ -1499,12 +1640,22 @@ function ComposeExportWorkspace({
       {exportReady ? (
         <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm leading-6 text-emerald-700">
           {production.export?.title} · {production.export?.generatedAt ? `生成于 ${formatShortTime(production.export.generatedAt)}` : "已生成"}
+          {production.export?.url ? (
+            <a className="ml-3 font-semibold underline" href={production.export.url} target="_blank">
+              打开视频
+            </a>
+          ) : null}
         </div>
       ) : (
         <p className="mt-4 text-sm leading-6 text-quiet">
           请先完成所有镜头视频生成，再合成本集。
         </p>
       )}
+      {error ? (
+        <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
+          {error}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -2119,6 +2270,145 @@ function updateWorkflowForScriptApproved(workflow: EpisodeWorkflowStage[]) {
     }
 
     return stage
+  })
+}
+
+function pipelineStatusToNovelResult(pipeline: ApiPipelineStatus): NovelToScriptResult {
+  return {
+    characters: pipeline.characters.map((character) => ({
+      id: String(character.id),
+      name: character.name,
+      age: "",
+      appearance: character.appearance ?? character.description ?? "",
+      profile: character.personality ?? character.description ?? "",
+    })),
+    scenes: pipeline.scenes.map((scene) => ({
+      id: String(scene.id),
+      name: scene.name,
+      environment: scene.description ?? "",
+      prompt: scene.imagePrompt ?? scene.atmosphere ?? scene.description ?? "",
+    })),
+    propsEffects: [],
+    storyboards: pipeline.storyboards.map((storyboard) => ({
+      id: String(storyboard.id),
+      shotNumber: String(storyboard.orderIndex + 1),
+      shotSize: storyboard.shotType ?? "medium",
+      durationSeconds: storyboard.duration ?? 5,
+      cameraAngle: storyboard.angle ?? undefined,
+      cameraMove: storyboard.movement ?? undefined,
+      location: undefined,
+      timeOfDay: undefined,
+      cameraLogic: storyboard.videoPrompt ?? storyboard.imagePrompt ?? "",
+      visualDescription: storyboard.imagePrompt ?? storyboard.videoPrompt ?? "",
+      action: storyboard.dialogue ?? storyboard.narration ?? undefined,
+      result: undefined,
+      atmosphere: storyboard.bgmNote ?? undefined,
+      prompt: storyboard.imagePrompt ?? storyboard.videoPrompt ?? "",
+      dialogue: storyboard.dialogue ?? storyboard.narration ?? "",
+      sound: storyboard.soundEffect ?? "",
+      characterIds: [],
+      sceneId: "",
+      propEffectIds: [],
+      reviewStatus: "original",
+    })),
+  }
+}
+
+function pipelineStatusToProduction(
+  pipeline: ApiPipelineRunResult,
+  generatedAt: string,
+): EpisodeProductionState {
+  return {
+    characterAssets: Object.fromEntries(
+      pipeline.characters.map((character) => [
+        String(character.id),
+        {
+          voiceId: character.voiceId ?? undefined,
+          voiceName: character.voiceProvider ?? undefined,
+          voiceSampleStatus: character.voiceId ? "ready" : "idle",
+          imageStatus: character.imageUrl ? "ready" : "idle",
+          imageLabel: character.imageUrl ? `${character.name}形象` : undefined,
+          updatedAt: generatedAt,
+        },
+      ]),
+    ),
+    sceneAssets: Object.fromEntries(
+      pipeline.scenes.map((scene) => [
+        String(scene.id),
+        {
+          imageStatus: scene.imageUrl ? "ready" : "idle",
+          imageLabel: scene.imageUrl ? `${scene.name}图片` : undefined,
+          updatedAt: generatedAt,
+        },
+      ]),
+    ),
+    storyboardAssets: Object.fromEntries(
+      pipeline.storyboards.map((storyboard) => [
+        String(storyboard.id),
+        {
+          ttsStatus: storyboard.ttsAudioUrl ? "ready" : "idle",
+          ttsAudioUrl: storyboard.ttsAudioUrl ?? undefined,
+          firstFrameStatus: storyboard.imageUrl ? "ready" : "idle",
+          firstFrameUrl: storyboard.imageUrl ?? undefined,
+          firstFrameLabel: storyboard.imageUrl ? "首帧参考图" : undefined,
+          lastFrameStatus: storyboard.imageUrl ? "ready" : "idle",
+          lastFrameUrl: storyboard.imageUrl ?? undefined,
+          lastFrameLabel: storyboard.imageUrl ? "尾帧参考图" : undefined,
+          videoStatus: storyboard.videoUrl ? "ready" : "idle",
+          videoUrl: storyboard.videoUrl ?? undefined,
+          composedVideoUrl: storyboard.composedVideoUrl ?? undefined,
+          updatedAt: generatedAt,
+        },
+      ]),
+    ),
+    export: {
+      status: pipeline.merge.mergedUrl ? "ready" : "idle",
+      title: `${pipeline.episode.title} 本地成片`,
+      url: pipeline.merge.mergedUrl,
+      generatedAt,
+    },
+    updatedAt: generatedAt,
+  }
+}
+
+function markDefaultPipelineWorkflowApproved(
+  workflow: EpisodeWorkflowStage[],
+  pipeline: ApiPipelineStatus,
+) {
+  const outputByStage: Partial<Record<WorkflowStageId, string[]>> = {
+    raw_content: ["原始内容"],
+    ai_rewrite: ["格式化剧本"],
+    extract_characters_scenes: ["角色表", "场景表", "道具/特效表", "AI 分镜脚本"],
+    voice_casting: ["角色音色", "试听占位"],
+    storyboard_list: ["分镜列表", "镜头提示词"],
+    character_images: ["角色形象"],
+    scene_images: ["场景图片"],
+    dubbing_generation: ["对白配音"],
+    shot_images: ["镜头首尾帧"],
+    video_generation: ["镜头视频"],
+    compose_export: ["本地成片"],
+  }
+
+  return workflow.map((stage) => {
+    const shouldApprove =
+      stage.stageId === "raw_content" ? pipeline.progress.hasRawContent :
+      stage.stageId === "ai_rewrite" ? pipeline.progress.hasScript :
+      stage.stageId === "extract_characters_scenes" ? pipeline.progress.hasCharacters || pipeline.progress.hasScenes :
+      stage.stageId === "voice_casting" ? pipeline.progress.hasVoices :
+      stage.stageId === "storyboard_list" ? pipeline.progress.hasStoryboards :
+      stage.stageId === "character_images" ? pipeline.progress.hasCharacterImages :
+      stage.stageId === "scene_images" ? pipeline.progress.hasSceneImages :
+      stage.stageId === "dubbing_generation" ? pipeline.progress.hasTts :
+      stage.stageId === "shot_images" ? pipeline.progress.hasShotImages :
+      stage.stageId === "video_generation" ? pipeline.progress.hasVideos :
+      stage.stageId === "compose_export" ? pipeline.progress.hasComposedVideos :
+      false
+
+    return {
+      ...stage,
+      status: shouldApprove ? "approved" as WorkflowStageStatus : stage.status,
+      outputs: shouldApprove ? outputByStage[stage.stageId] ?? stage.outputs : stage.outputs,
+    }
   })
 }
 

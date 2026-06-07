@@ -17,6 +17,7 @@ import agentRouter from './routes/agent.js'
 import aiConfigsRouter from './routes/aiConfigs.js'
 import composeRouter from './routes/compose.js'
 import mergeRouter from './routes/merge.js'
+import pipelineRouter from './routes/pipeline.js'
 import webhooksRouter from './routes/webhooks.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -47,6 +48,7 @@ app.route('/api/v1/agent', agentRouter)
 app.route('/api/v1/ai-configs', aiConfigsRouter)
 app.route('/api/v1/compose', composeRouter)
 app.route('/api/v1/merge', mergeRouter)
+app.route('/api/v1/pipeline', pipelineRouter)
 app.route('/webhooks', webhooksRouter)
 
 // 健康检查

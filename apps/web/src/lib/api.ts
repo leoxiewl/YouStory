@@ -134,6 +134,58 @@ export type ApiAgentResult = {
   toolResults: Array<{ toolName: string; result: unknown }>
 }
 
+export type ApiComposeResult = {
+  message: string
+  storyboardId?: number
+  episodeId?: number
+  count?: number
+  composedVideoUrl?: string
+  composed?: Array<{ storyboardId: number; composedVideoUrl: string }>
+}
+
+export type ApiMergeResult = {
+  id: number
+  status: string
+  episodeId: number
+  mergedUrl?: string
+  localPath?: string
+  errorMsg?: string
+}
+
+export type ApiAiServiceType = "text" | "image" | "video" | "tts"
+
+export type ApiAiConfig = {
+  id: number
+  serviceType: ApiAiServiceType
+  provider: string
+  name: string
+  baseUrl: string | null
+  apiKey: string | null
+  hasApiKey?: boolean
+  model: string | null
+  extraParams: string | null
+  isDefault: boolean
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type ApiPipelineRunResult = ApiPipelineStatus & {
+  message: string
+  episodeId: number
+  textConfigId: number | null
+  imageConfigId: number | null
+  videoConfigId: number | null
+  audioConfigId: number | null
+  composed: Array<{ storyboardId: number; composedVideoUrl: string }>
+  merge: {
+    id: number
+    status: string
+    episodeId: number
+    mergedUrl?: string
+  }
+}
+
 // ─── Records ─────────────────────────────────────────────────────────────────
 
 export const recordsApi = {
@@ -242,13 +294,34 @@ export const storyboardsApi = {
     apiFetch<{ id: number }>(`/storyboards/${id}`, { method: "DELETE" }),
 
   generateTts: (id: number) =>
-    apiFetch<{ message: string; storyboardId: number }>(`/storyboards/${id}/generate-tts`, { method: "POST" }),
+    apiFetch<{ message: string; storyboardId: number; audioUrl?: string }>(`/storyboards/${id}/generate-tts`, { method: "POST" }),
 
   generateImage: (id: number) =>
-    apiFetch<{ message: string; storyboardId: number }>(`/storyboards/${id}/generate-image`, { method: "POST" }),
+    apiFetch<{ message: string; storyboardId: number; imageUrl?: string }>(`/storyboards/${id}/generate-image`, { method: "POST" }),
 
   generateVideo: (id: number) =>
-    apiFetch<{ message: string; storyboardId: number }>(`/storyboards/${id}/generate-video`, { method: "POST" }),
+    apiFetch<{ message: string; storyboardId: number; videoUrl?: string }>(`/storyboards/${id}/generate-video`, { method: "POST" }),
+}
+
+// ─── Compose / Merge ────────────────────────────────────────────────────────
+
+export const composeApi = {
+  storyboard: (id: number) =>
+    apiFetch<ApiComposeResult>(`/compose/storyboards/${id}/compose`, { method: "POST" }),
+
+  episode: (id: number) =>
+    apiFetch<ApiComposeResult>(`/compose/episodes/${id}/compose-all`, { method: "POST" }),
+
+  status: (id: number) =>
+    apiFetch<{ total: number; composed: number; progress: number }>(`/compose/episodes/${id}/compose-status`),
+}
+
+export const mergeApi = {
+  episode: (id: number) =>
+    apiFetch<ApiMergeResult>(`/merge/episodes/${id}/merge`, { method: "POST" }),
+
+  get: (id: number) =>
+    apiFetch<ApiMergeResult | null>(`/merge/episodes/${id}/merge`),
 }
 
 // ─── Agent ───────────────────────────────────────────────────────────────────
@@ -273,9 +346,30 @@ export const agentApi = {
 // ─── AI Configs ──────────────────────────────────────────────────────────────
 
 export const aiConfigsApi = {
-  list: () => apiFetch<unknown[]>("/ai-configs"),
-  create: (data: unknown) =>
-    apiFetch<unknown>("/ai-configs", { method: "POST", body: JSON.stringify(data) }),
-  update: (id: number, data: unknown) =>
-    apiFetch<unknown>(`/ai-configs/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  list: () => apiFetch<ApiAiConfig[]>("/ai-configs"),
+
+  defaults: () => apiFetch<Array<ApiAiConfig | null>>("/ai-configs/defaults"),
+
+  create: (data: Partial<ApiAiConfig> & {
+    serviceType: ApiAiServiceType
+    provider: string
+    name: string
+    apiKey?: string
+  }) => apiFetch<ApiAiConfig>("/ai-configs", { method: "POST", body: JSON.stringify(data) }),
+
+  update: (id: number, data: Partial<ApiAiConfig> & { apiKey?: string }) =>
+    apiFetch<ApiAiConfig>(`/ai-configs/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+
+  delete: (id: number) =>
+    apiFetch<{ id: number }>(`/ai-configs/${id}`, { method: "DELETE" }),
+}
+
+// ─── Pipeline ───────────────────────────────────────────────────────────────
+
+export const pipelineApi = {
+  runDefault: (episodeId: number, data: { novelText?: string }) =>
+    apiFetch<ApiPipelineRunResult>(`/pipeline/episodes/${episodeId}/run-default`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 }
