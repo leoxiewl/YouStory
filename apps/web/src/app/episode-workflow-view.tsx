@@ -373,7 +373,7 @@ function RawContentWorkspace({
   }
 
   return (
-    <div className="mt-5 space-y-4">
+    <div className="mt-5">
       <div className="rounded-[22px] border border-line bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -398,7 +398,6 @@ function RawContentWorkspace({
           value={rawText}
         />
       </div>
-      <WorkflowInputsPanel episode={episode} stage={stage} />
     </div>
   )
 }
@@ -416,10 +415,19 @@ function RewriteWorkspace({
 }) {
   const rawText = episode.novelToScript?.novelText || sourceRecord?.body || episode.summary
   const [draft, setDraft] = useState(episode.script.draft)
+  const [error, setError] = useState("")
+  const { running: rewriting, error: agentError, run: runAgent } = useAgent()
 
   useEffect(() => {
     setDraft(episode.script.draft)
+    setError("")
   }, [episode.id, episode.script.draft])
+
+  useEffect(() => {
+    if (agentError) {
+      setError(agentError)
+    }
+  }, [agentError])
 
   function saveDraft(nextDraft = draft) {
     const cleanedDraft = nextDraft.trim()
@@ -438,48 +446,100 @@ function RewriteWorkspace({
     })
   }
 
-  function mockRewrite() {
-    const rewritten = [
-      `【本集主题】${episode.title}`,
-      `【情绪基调】${episode.emotionalTone || "真实、克制、有记忆感"}`,
-      "【剧情正文】",
-      rawText.trim() || episode.summary,
-      "【制作提示】保留真实细节，把关键动作、沉默和转折拆成可拍摄段落。",
-    ].join("\n")
+  async function rewriteWithTextModel() {
+    const episodeId = Number(episode.id)
+    const projectId = Number(episode.projectId)
+    const cleanedRawText = rawText.trim()
 
-    setDraft(rewritten)
-    saveDraft(rewritten)
+    if (!cleanedRawText) {
+      setError("请先保存原文，再进行改写。")
+      return
+    }
+    if (!episodeId || !projectId) {
+      setError("当前集数未连接到后端，请先保存项目后重试。")
+      return
+    }
+
+    setError("")
+    onUpdateEpisode({
+      ...episode,
+      workflow: updateWorkflowStage(episode.workflow, stage.stageId, {
+        status: "drafting",
+        inputs: ["原始内容"],
+        outputs: [],
+      }),
+    })
+
+    const result = await runAgent(
+      "story_adapter",
+      `请读取当前集原始内容，并将其改写为适合后续提取角色、场景和分镜的中文短剧剧本。务必调用保存工具写回剧本。`,
+      projectId,
+      episodeId,
+    )
+
+    if (!result) {
+      setError(agentError || "改写失败，请检查文本模型配置后重试。")
+      onUpdateEpisode({
+        ...episode,
+        workflow: updateWorkflowStage(episode.workflow, stage.stageId, {
+          status: "needs_revision",
+          inputs: ["原始内容"],
+          outputs: [],
+        }),
+      })
+      return
+    }
+
+    try {
+      const updatedEpisode = await episodesApi.get(episodeId)
+      const nextDraft = updatedEpisode.scriptContent?.trim() || draft
+
+      setDraft(nextDraft)
+      onUpdateEpisode({
+        ...episode,
+        script: {
+          ...episode.script,
+          draft: nextDraft,
+        },
+        workflow: updateWorkflowStage(episode.workflow, stage.stageId, {
+          status: nextDraft ? "approved" : "not_started",
+          inputs: ["原始内容"],
+          outputs: nextDraft ? ["格式化剧本"] : [],
+        }),
+      })
+    } catch (rewriteError) {
+      setError(rewriteError instanceof Error ? rewriteError.message : "改写完成，但刷新剧本内容失败。")
+    }
   }
 
   return (
-    <div className="mt-5 grid gap-4 xl:grid-cols-[1fr_320px]">
+    <div className="mt-5">
       <div className="rounded-[22px] border border-line bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h3 className="font-semibold">格式化剧本</h3>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-quiet">
-              本地版使用模拟改写，把原始内容整理成后续提取和分镜可用的剧本文本。
+              使用已配置的文本模型，把原始内容整理成后续提取和分镜可用的剧本文本。
             </p>
           </div>
           <div className="flex shrink-0 flex-wrap gap-2">
             <button
-              className="inline-flex items-center gap-2 rounded-full border border-line bg-white px-4 py-2 text-sm font-medium text-ink transition hover:border-ink"
-              onClick={() => saveDraft(rawText)}
+              className="inline-flex items-center gap-2 rounded-full bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={rewriting}
+              onClick={rewriteWithTextModel}
               type="button"
             >
-              <FileText size={16} />
-              跳过改写
-            </button>
-            <button
-              className="inline-flex items-center gap-2 rounded-full bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-black"
-              onClick={mockRewrite}
-              type="button"
-            >
-              <Sparkles size={16} />
-              模拟改写
+              {rewriting ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
+              改写
             </button>
           </div>
         </div>
+        {error ? (
+          <div className="mt-3 flex items-start gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
+            <AlertCircle className="mt-0.5 shrink-0" size={16} />
+            <span>{error}</span>
+          </div>
+        ) : null}
         <textarea
           className="mt-4 min-h-64 w-full resize-y rounded-2xl border border-line bg-[#fbfbfa] px-4 py-3 text-base leading-7 outline-none transition placeholder:text-[#b8b8b2] focus:border-ink focus:bg-white"
           onBlur={() => saveDraft()}
@@ -488,7 +548,6 @@ function RewriteWorkspace({
           value={draft}
         />
       </div>
-      <SourceRecordPanel sourceRecord={sourceRecord} />
     </div>
   )
 }

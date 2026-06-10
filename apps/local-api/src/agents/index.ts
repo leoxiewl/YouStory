@@ -19,6 +19,36 @@ const SKILLS_DIR = path.join(__dirname, '../../../../skills')
 const AGENT_TYPES = ['story_adapter', 'world_builder', 'storyboard_breaker', 'voice_caster', 'visual_director'] as const
 type AgentType = typeof AGENT_TYPES[number]
 
+function normalizeOpenAIBaseUrl(baseUrl?: string | null) {
+  if (!baseUrl) return undefined
+
+  const trimmed = baseUrl.trim()
+  if (!trimmed) return undefined
+
+  try {
+    const url = new URL(trimmed)
+
+    if (url.hostname === 'api.deepseek.com' && !url.pathname.startsWith('/v1')) {
+      url.pathname = `/v1${url.pathname === '/' ? '' : url.pathname}`
+    }
+
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return trimmed.replace(/\/$/, '')
+  }
+}
+
+function shouldUseOpenAIChatApi(baseUrl?: string | null) {
+  if (!baseUrl) return false
+
+  try {
+    const url = new URL(baseUrl)
+    return url.hostname !== 'api.openai.com'
+  } catch {
+    return true
+  }
+}
+
 function loadSkill(type: AgentType): string {
   const skillPath = path.join(SKILLS_DIR, type, 'SKILL.md')
   try {
@@ -31,6 +61,7 @@ function loadSkill(type: AgentType): string {
 function getModel(modelOverride?: string | null) {
   const config = getRuntimeAiConfig('text')
   const modelId = modelOverride ?? config?.model ?? process.env.DEFAULT_TEXT_MODEL ?? 'gpt-4o'
+  const normalizedBaseUrl = normalizeOpenAIBaseUrl(config?.baseUrl)
 
   if ((config?.provider === 'gemini' || modelId.startsWith('gemini')) && config?.apiKey) {
     return createGoogleGenerativeAI({
@@ -40,10 +71,12 @@ function getModel(modelOverride?: string | null) {
   }
 
   if (config?.provider === 'openai' && config.apiKey) {
-    return createOpenAI({
+    const provider = createOpenAI({
       apiKey: config.apiKey,
-      baseURL: config.baseUrl ?? undefined,
-    })(modelId)
+      baseURL: normalizedBaseUrl,
+    })
+
+    return shouldUseOpenAIChatApi(normalizedBaseUrl) ? provider.chat(modelId) : provider(modelId)
   }
 
   if (modelId.startsWith('gemini')) return google(modelId)
