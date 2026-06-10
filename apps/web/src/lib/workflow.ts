@@ -138,21 +138,9 @@ export function normalizeStoryProject(project: Partial<StoryProject>): StoryProj
   const createdAt = project.createdAt ?? new Date().toISOString()
   const seriesTheme = project.seriesTheme ?? deriveSeriesTheme(summary)
   const episodes =
-    Array.isArray(project.episodes) && project.episodes.length > 0
+    Array.isArray(project.episodes)
       ? project.episodes.map((episode, index) => normalizeEpisode(episode, id, index + 1, summary))
-      : [
-          createStoryEpisode({
-            projectId: id,
-            episodeNumber: 1,
-            title,
-            summary,
-            keywords: deriveKeywords(summary),
-            emotionalTone: "真实、克制、带一点回望感",
-            scriptDraft: summary,
-            payoffMoments: ["真实记录里的情绪高点"],
-            plotBranches: ["保留真实叙事", "强化转折与告别", "改写为更具戏剧张力的版本"],
-          }),
-        ]
+      : []
 
   return {
     id,

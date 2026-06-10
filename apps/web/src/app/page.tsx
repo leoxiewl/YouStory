@@ -215,14 +215,10 @@ export default function HomePage() {
         summary,
         seriesTheme: summary,
       })
-      await addEpisode(project.id, {
-        title: record.title,
-        rawContent: cleanedBody,
-      })
       setDraftBody("")
       setSelectedProjectId(project.id)
       setActiveView("project-detail")
-      setNotice("已从这条记录开始一个单集剧集项目。")
+      setNotice("主题项目已创建。你可以在项目里手动添加第一集。")
     } catch (e) {
       setNotice(`创建项目失败：${(e as Error).message}`)
     }
@@ -245,13 +241,9 @@ export default function HomePage() {
         summary,
         seriesTheme: summary,
       })
-      await addEpisode(project.id, {
-        title: record.title,
-        rawContent: record.body,
-      })
       setSelectedProjectId(project.id)
       setActiveView("project-detail")
-      setNotice("已从这条记录开始一个单集剧集项目。")
+      setNotice("主题项目已创建。你可以在项目里手动添加第一集。")
     } catch (e) {
       setNotice(`创建项目失败：${(e as Error).message}`)
     }
@@ -1164,34 +1156,39 @@ function ProjectDetailView({
               添加剧集
             </button>
           </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            {project.episodes.map((episode) => (
-              <button
-                className="rounded-2xl border border-line bg-[#fbfbfa] p-5 text-left transition hover:border-ink hover:bg-white hover:shadow-soft"
-                key={episode.id}
-                onClick={() => onOpenEpisode(episode.id)}
-                type="button"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <span className="text-sm font-medium text-story">第 {episode.episodeNumber} 集</span>
-                    <h3 className="mt-2 text-xl font-semibold">{episode.title}</h3>
-                  </div>
-                  <span className="rounded-full bg-white px-3 py-1 text-xs text-quiet shadow-sm">
-                    {getEpisodeProgress(episode)} / {episode.workflow.length}
-                  </span>
-                </div>
-                <p className="mt-3 text-sm leading-7 text-quiet">{episode.summary}</p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {episode.keywords.map((keyword) => (
-                    <span className="rounded-full bg-white px-2.5 py-1 text-xs text-quiet" key={keyword}>
-                      {keyword}
+          {project.episodes.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-line bg-[#fbfbfa] p-6 text-sm leading-7 text-quiet">
+              当前只有主题，还没有创建剧集。点击右上角“添加剧集”后，再进入单集工作流继续生产。
+            </div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              {project.episodes.map((episode) => (
+                <button
+                  className="rounded-2xl border border-line bg-[#fbfbfa] p-5 text-left transition hover:border-ink hover:bg-white hover:shadow-soft"
+                  key={episode.id}
+                  onClick={() => onOpenEpisode(episode.id)}
+                  type="button"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <span className="text-base font-semibold text-story">第 {episode.episodeNumber} 集</span>
+                    </div>
+                    <span className="rounded-full bg-white px-3 py-1 text-xs text-quiet shadow-sm">
+                      {getEpisodeProgress(episode)} / {episode.workflow.length}
                     </span>
-                  ))}
-                </div>
-              </button>
-            ))}
-          </div>
+                  </div>
+                  <p className="mt-3 text-sm leading-7 text-quiet">{episode.summary}</p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {episode.keywords.map((keyword) => (
+                      <span className="rounded-full bg-white px-2.5 py-1 text-xs text-quiet" key={keyword}>
+                        {keyword}
+                      </span>
+                    ))}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
